@@ -77,7 +77,8 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
 
     const uint32_t working_reg = 0;
 
-    init_bcast<ELWSUB, BroadcastType::COL>(cb_attention_weights, cb_intermediates, cb_attention_weights);
+    init_bcast<EltwiseBinaryType::ELWSUB, BroadcastType::COL>(
+        cb_attention_weights, cb_intermediates, cb_attention_weights);
 
     reconfig_data_format(cb_attention_weights, cb_intermediates);
     tile_regs_acquire();
