@@ -34,7 +34,7 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
     // Loop-invariant invert mask; hoisted out of the unrolled loop to avoid re-issuing
     // TTI_SFPLOADI on every iteration.
     if constexpr (invert_result) {
-        TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0x01);
+        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
     }
 
     // Pick X/Y order once; LREG0 holds X, LREG1 holds Y.
@@ -56,7 +56,7 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
         TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
 
         // if (LREG3 == 0) -> same signs: signed subtract + extract sign of X-Y
-        TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, SFPSETCC_MOD1_LREG_EQ0);
+        TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, sfpi::SFPSETCC_MOD1_LREG_EQ0);
         TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
         TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
         // else -> different signs: load 0, then load 1 if MSB(X) != 0 (X is negative, so X < Y)
@@ -274,7 +274,7 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
     // Loop-invariant invert mask; hoisted out of the unrolled loop to avoid re-issuing
     // TTI_SFPLOADI on every iteration.
     if constexpr (invert_result) {
-        TTI_SFPLOADI(p_sfpu::LREG7, SFPLOADI_MOD0_USHORT, 0x01);
+        TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
     }
 
     // Pick X/Y order once; LREG0 holds X, LREG1 holds Y.
@@ -297,12 +297,12 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
             TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
 
             // if (LREG3 == 0) -> same MSBs: signed subtract + extract sign
-            TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, SFPSETCC_MOD1_LREG_EQ0);
+            TTI_SFPSETCC(0, p_sfpu::LREG3, 0 /*unused*/, sfpi::SFPSETCC_MOD1_LREG_EQ0);
             TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
             TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
             // else -> different MSBs: load 0, then load 1 if MSB(X) == 0 (X is smaller)
             TTI_SFPCOMPC(0 /*unused*/, 0 /*unused*/, 0 /*unused*/, 0 /*unused*/);
-            TTI_SFPLOADI(p_sfpu::LREG1, SFPLOADI_MOD0_USHORT, 0x01);
+            TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
             TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);  // LREG1 = 1 XOR MSB(X)
             TTI_SFPENCC(0, 0, 0, 0);
         } else {
