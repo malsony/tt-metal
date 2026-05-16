@@ -21,14 +21,14 @@ enum VectorMode
     Invalid   = 0xFF,
 };
 
-enum ReduceDim
+enum class ReduceDim : std::uint8_t
 {
     REDUCE_ROW,
     REDUCE_COL,
     REDUCE_SCALAR,
 };
 
-enum TileDim
+enum class TileDim : std::uint8_t
 {
     R_IDX = 0,
     C_IDX = 1,
