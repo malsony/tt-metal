@@ -20,7 +20,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-// ReluType encoding (matches ckernel::ReluType)
+// ReluType encoding (matches ckernel::ReluType underlying values)
 enum class PackReluMode : uint32_t {
     NO_RELU = 0,
     ZERO_RELU = 1,
@@ -224,13 +224,13 @@ static void run_pack_relu_test(
     EXPECT_TRUE(pass) << "Failure position=" << argfail;
 }
 
-// ZERO_RELU: max(0, x)
+// ReluType::ZERO_RELU: max(0, x)
 TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluZero) {
     run_pack_relu_test(
         this->devices_.at(0), make_relu_config(PackReluMode::ZERO_RELU), [](float x) { return std::max(0.0f, x); });
 }
 
-// MIN_THRESHOLD_RELU: x <= threshold ? 0 : x (threshold = 0.25)
+// ReluType::MIN_THRESHOLD_RELU: x <= threshold ? 0 : x (threshold = 0.25)
 TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMinThreshold) {
     const float threshold = 0.25f;
     run_pack_relu_test(
@@ -239,7 +239,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMinThreshold) {
         });
 }
 
-// MAX_THRESHOLD_RELU: clamp to [0, threshold] (threshold = 0.5)
+// ReluType::MAX_THRESHOLD_RELU: clamp to [0, threshold] (threshold = 0.5)
 TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMaxThreshold) {
     const float threshold = 0.5f;
     run_pack_relu_test(
