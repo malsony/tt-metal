@@ -63,7 +63,7 @@ sfpi_inline sfpi::vFloat _float32_to_bf16_rne_(sfpi::vFloat in)
 // SFP_DESTREG_STRIDE = 2). The advance through a face is performed with
 // `sfpi::dst_reg++` inside the inner loop; the per-face dst-counter advance
 // between calls is handled by the caller (e.g. via
-// `_llk_math_eltwise_binary_sfpu_inc_dst_face_addr_()`).
+// `_llk_math_eltwise_sfpu_inc_dst_face_addr_()`).
 //
 // Note: BINOP is preserved as a template parameter to match the BH metal
 // signature (which lets the same wrapper template fan out to all binary ops),
@@ -90,7 +90,7 @@ inline void _calculate_sfpu_binary_div_(
             v_else
             {
                 result = std::numeric_limits<float>::infinity();
-                result = sfpi::setsgn(result, in0);
+                result = sfpi::copysgn(result, in0);
             }
             v_endif;
         }

@@ -79,28 +79,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Quasar, so a face (TEST_FACE_R_DIM = 16 rows) corresponds to 8 SFP iters.
     const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
 
-    _llk_math_eltwise_binary_sfpu_init_();
+    _llk_math_eltwise_sfpu_init_();
 
     // Programmable-constant init for the sfpi reciprocal helper. Sets
     // `sfpi::vConstFloatPrgm0 = 2.0f` (the constant used by the in-helper
     // Newton-Raphson refinement). No-op when APPROXIMATION_MODE = true.
     _sfpu_binary_init_<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION>();
 
-    _llk_math_eltwise_binary_sfpu_start_(0);
+    _llk_math_eltwise_sfpu_start_(0);
 
     for (std::uint32_t face = 0; face < NUM_FACES; face++)
     {
         // BH-style sfpi vFloat divide: reads operand tiles via
         // `dst_reg[idx * 32]` (sfpi tile stride) from the current dest base
         // and writes the result at `dst_reg[dst_idx * 32]`. The dest base is
-        // advanced one face between calls by `_llk_math_eltwise_binary_sfpu_
+        // advanced one face between calls by `_llk_math_eltwise_sfpu_
         // inc_dst_face_addr_()` below.
         _calculate_sfpu_binary_div_<false /*APPROXIMATION_MODE*/, SFPU_BINARY_OPERATION, is_fp32_dest_acc_en>(
             num_sfpu_iterations, params.SRC0_TILE_IDX, params.SRC1_TILE_IDX, params.DST_TILE_IDX);
-        _llk_math_eltwise_binary_sfpu_inc_dst_face_addr_();
+        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
     }
 
-    _llk_math_eltwise_binary_sfpu_done_();
+    _llk_math_eltwise_sfpu_done_();
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 }
