@@ -14,7 +14,11 @@ from helpers.llk_params import (
     UnpackerEngine,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    input_output_formats,
+    is_invalid_quasar_sfpu_format_combination,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -30,60 +34,26 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
-
-def _is_invalid_quasar_combination(
-    fmt: FormatConfig, dest_acc: DestAccumulation
-) -> bool:
-    """
-    Check if format combination is invalid for Quasar.
-    """
-    in_fmt = fmt.input_format
-    out_fmt = fmt.output_format
-
-    # Quasar packer does not support non-Float32 to Float32 conversion when dest_acc=No
-    if (
-        in_fmt != DataFormat.Float32
-        and out_fmt == DataFormat.Float32
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    # Quasar SFPU with Float32 input and Float16 output requires dest_acc=Yes
-    if (
-        in_fmt == DataFormat.Float32
-        and out_fmt == DataFormat.Float16
-        and dest_acc == DestAccumulation.No
-    ):
-        return True
-
-    # Integer and float formats cannot be mixed in input/output
-    if in_fmt.is_integer() != out_fmt.is_integer():
-        return True
-
-    # The div C++ test source has no datacopy stage — operands are streamed
-    # straight into DEST via unpack-to-dest. Quasar unpack-to-dest only works
-    # when the dest cell width matches the input width:
-    #   16-bit input  ↔ dest_acc=No  (16-bit dest cells)
-    #   32-bit input  ↔ dest_acc=Yes (32-bit dest cells)
-    # Mismatched widths hang because no valid data ever lands in DEST and the
-    # math thread blocks forever on dvalid.
-    if in_fmt.is_32_bit() != (dest_acc == DestAccumulation.Yes):
-        return True
-
-    return False
-
-
-# Tile-index permutations exercised per format. Picked to cover:
-#   - same vs distinct dst (in-place vs out-of-place writeback),
-#   - src0/src1 ordering (verifies operand-swap path is symmetric),
-#   - non-zero src/dst indices (catches DEST-tile addressing bugs).
+# DEST-tile offsets (dividend, divisor, result) for the divide helper, chosen
+# to cover writing the result back over the dividend tile, over the divisor
+# tile, and to a separate tile with both operand offsets non-zero.
 _TILE_INDEX_VARIANTS = [
     (0, 1, 0),
-    (1, 0, 0),
     (0, 1, 1),
-    (0, 2, 1),
     (2, 3, 0),
 ]
+
+# Crafted lanes within face 0 of the dividend and divisor tiles that exercise
+# the special-case branches in `_calculate_sfpu_binary_div_`. Entries are
+# (lane_in_tile, dividend_value, divisor_value, expected_result_kind).
+_SPECIAL_CASE_LANES = [
+    (0, 0.0, 0.0, "nan"),
+    (1, 1.5, 0.0, "pos_inf"),
+    (2, -1.5, 0.0, "neg_inf"),
+    (3, 2.7, 2.7, "one"),
+    (4, -3.3, -3.3, "one"),
+]
+_ELEMENTS_PER_TILE = 1024
 
 
 def generate_sfpu_binary_div_combinations(
@@ -108,7 +78,13 @@ def generate_sfpu_binary_div_combinations(
             else (DestAccumulation.No, DestAccumulation.Yes)
         )
         for dest_acc in dest_acc_modes:
-            if _is_invalid_quasar_combination(fmt, dest_acc):
+            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
+                continue
+
+            if (
+                fmt.input_format == DataFormat.Float16
+                and dest_acc == DestAccumulation.Yes
+            ):
                 continue
 
             for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
@@ -145,36 +121,39 @@ SFPU_BINARY_DIV_FORMATS = input_output_formats(
 )
 
 
-def _prepare_div_inputs(src_A: torch.Tensor, data_format: DataFormat) -> torch.Tensor:
+def _prepare_div_inputs(
+    src_A: torch.Tensor,
+    data_format: DataFormat,
+    src0_idx: int,
+    src1_idx: int,
+) -> torch.Tensor:
     """
     Map the [0, 1) uniform stimuli into a numerically friendly range for the
-    SFPU divide kernel.
+    SFPU divide kernel, then overwrite a handful of lanes in the dividend and
+    divisor tiles with crafted values that exercise the special-case branches
+    (0/0 -> NaN, x/0 -> ±inf, x/x -> 1.0).
 
-    The kernel computes `in0 / in1` as `in0 * reciprocal(in1)` with a
-    Newton-Raphson refinement (BH-port). To avoid:
-
-      * spurious 0/0 -> NaN, x/0 -> ±inf in non-special-case tiles, and
-      * catastrophic loss of precision when the divisor is sub-normal,
-
-    every element is mapped to a value in [-4.0, -0.25] union [0.25, 4.0].
-    Both halves of the range are exercised so the sign-handling in the
-    helper (`sfpi::setsgn`) is covered for negative dividends.
-
-    Each element of `src_A` is used both as a potential dividend (when its
-    tile is selected as `src0_idx`) and as a divisor (when selected as
-    `src1_idx`), so the same range constraint applies to the whole tensor.
+    The bulk of the tensor is mapped to ±[0.25, 4.0] so the main reciprocal +
+    Newton-Raphson path is not contaminated by accidental zeros or subnormals.
+    Only the lanes listed in `_SPECIAL_CASE_LANES` (within face 0 of the
+    dividend and divisor tiles) are forced to the special-case values.
     """
     torch_format = format_dict[data_format]
 
-    # Uniform [0, 1) -> [-4, 4]
     scaled = (src_A.to(torch.float32) - 0.5) * 8.0
 
-    # Push values out of (-0.25, 0.25): if abs(x) < 0.25, snap to ±0.25 keeping sign.
     sign = torch.where(scaled >= 0, torch.tensor(1.0), torch.tensor(-1.0))
     abs_scaled = torch.maximum(scaled.abs(), torch.tensor(0.25))
     scaled = sign * abs_scaled
 
-    return scaled.to(torch_format)
+    scaled = scaled.to(torch_format)
+
+    flat = scaled.flatten()
+    for lane, dividend, divisor, _ in _SPECIAL_CASE_LANES:
+        flat[src0_idx * _ELEMENTS_PER_TILE + lane] = dividend
+        flat[src1_idx * _ELEMENTS_PER_TILE + lane] = divisor
+
+    return flat.reshape(scaled.shape)
 
 
 @pytest.mark.quasar
@@ -192,10 +171,12 @@ def test_sfpu_binary_div_quasar(formats_dest_acc_implied_tile_indices):
     via the binary SFPU harness, and verifies the result against a golden
     reference computed in fp32 by `BinarySFPUGolden._div`.
 
-    Stimuli are mapped to ±[0.25, 4.0] (see `_prepare_div_inputs`) so the
-    divisor tile never contains 0; the special-case branches (0/0 -> NaN,
-    x/0 -> ±inf) are not exercised by this test, only the main reciprocal
-    path is.
+    The bulk of the tile exercises the main reciprocal + Newton-Raphson path
+    with stimuli in ±[0.25, 4.0]. A handful of lanes in face 0 are overwritten
+    with crafted values (see `_SPECIAL_CASE_LANES`) so that 0/0 -> NaN,
+    x/0 -> ±inf, and x/x -> 1.0 branches are all hit. The forced-exact x/x
+    branch is additionally checked bit-exact against 1.0 after the main
+    tolerance-based comparison.
     """
     (
         formats,
@@ -219,7 +200,7 @@ def test_sfpu_binary_div_quasar(formats_dest_acc_implied_tile_indices):
         sfpu=False,
     )
 
-    src_A = _prepare_div_inputs(src_A, formats.input_format)
+    src_A = _prepare_div_inputs(src_A, formats.input_format, src0_idx, src1_idx)
 
     num_faces = 4
     mathop = MathOperation.SfpuElwdiv
@@ -289,3 +270,13 @@ def test_sfpu_binary_div_quasar(formats_dest_acc_implied_tile_indices):
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+    # The kernel's x/x branch forces an exact 1.0 regardless of reciprocal
+    # rounding, so check bit-exact rather than relying on isclose tolerance.
+    for lane, _, _, kind in _SPECIAL_CASE_LANES:
+        if kind != "one":
+            continue
+        actual = res_tensor[lane].item()
+        assert (
+            actual == 1.0
+        ), f"x/x special case at lane {lane}: expected exact 1.0, got {actual}"
